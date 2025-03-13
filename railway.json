@@ -10,13 +10,13 @@
   },
   "deploy": {
     "startCommand": "python main.py",
-    "restartPolicyType": "on-failure",
+    "restartPolicy": "on-failure",  
     "restartPolicyMaxRetries": 10
   },
-    "healthcheck": {
-      "path": "/",
-        "intervalSeconds": 30,
-      "timeoutSeconds": 10,
-        "retries": 3
+  "healthcheck": {
+    "path": "/",
+    "intervalSeconds": 30,
+    "timeoutSeconds": 10,
+    "retries": 3
   }
 }
