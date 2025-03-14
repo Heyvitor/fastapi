@@ -4,73 +4,71 @@ import pyttsx3
 import io
 import logging
 import base64
-import soundfile as sf  # Para converter o áudio pra base64 compatível
+import os
 
-# Configurando o logging pra gente saber o que tá rolando
+# Configurando o logging pra gente ver o que tá acontecendo
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Criando nosso app com FastAPI
 app = FastAPI()
 
-# Função pra gerar o áudio com vozes diferentes
 def generate_audio_data(text: str, lang: str = 'pt-BR', voice: str = 'normal'):
     """
-    Transforma texto em áudio com pyttsx3, escolhendo voz de homem, mulher ou normal.
+    Gera áudio com pyttsx3, tentando vozes de homem, mulher ou normal.
     """
     try:
         # Inicia o motor de fala
-        engine = pyttsx3.init()
+        engine = pyttsx3.init('espeak')  # Especifica o eSpeak explicitamente
 
-        # Define o idioma (se disponível no sistema)
+        # Lista as vozes disponíveis
         voices = engine.getProperty('voices')
+        if not voices:
+            raise Exception("Nenhuma voz disponível. Instale o eSpeak ou outro sintetizador.")
+
+        # Tenta configurar o idioma
+        voice_set = False
         if 'pt' in lang.lower():
-            # Tenta encontrar uma voz em português (depende do sistema)
             for v in voices:
                 if 'pt' in v.languages[0].lower():
                     engine.setProperty('voice', v.id)
+                    voice_set = True
                     break
-        else:
-            # Usa o padrão do sistema pra outros idiomas
-            engine.setProperty('voice', voices[0].id)
+        if not voice_set:
+            engine.setProperty('voice', voices[0].id)  # Usa a voz padrão se o idioma não for encontrado
 
         # Ajusta a voz com base na escolha
         if voice == 'man':
-            # Tenta achar uma voz mais grave (geralmente ID 0 ou ajustável no sistema)
-            engine.setProperty('voice', voices[0].id)  # Voz padrão (muitas vezes masculina)
-            engine.setProperty('rate', 150)  # Velocidade um pouco mais lenta pra soar grave
+            engine.setProperty('voice', voices[0].id)  # Voz padrão, geralmente masculina no eSpeak
+            engine.setProperty('rate', 150)  # Mais grave
         elif voice == 'woman':
-            # Tenta uma voz mais aguda (geralmente ID 1 ou ajustável)
             engine.setProperty('voice', voices[1].id if len(voices) > 1 else voices[0].id)
-            engine.setProperty('rate', 200)  # Mais rápida pra soar feminina
+            engine.setProperty('rate', 200)  # Mais aguda
         else:
-            # Voz normal, sem ajustes extras
-            engine.setProperty('rate', 175)
+            engine.setProperty('rate', 175)  # Normal
 
-        # Adiciona pausas pra soar mais humano
+        # Adiciona pausas pra soar mais natural
         text_with_pauses = text.replace('.', '. ').replace(',', ', ')
 
-        # Gera o áudio e salva temporariamente em memória
+        # Gera o áudio
         audio_file = io.BytesIO()
-        engine.save_to_file(text_with_pauses, 'temp.wav')
+        temp_file = 'temp.wav'
+        engine.save_to_file(text_with_pauses, temp_file)
         engine.runAndWait()
 
-        # Lê o arquivo WAV e converte pra base64
-        with open('temp.wav', 'rb') as f:
+        # Lê o arquivo e converte pra base64
+        with open(temp_file, 'rb') as f:
             audio_data = f.read()
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
 
-        # Deleta o arquivo temporário
-        import os
-        if os.path.exists('temp.wav'):
-            os.remove('temp.wav')
+        # Remove o arquivo temporário
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
         return io.BytesIO(audio_data), audio_base64
 
     except Exception as e:
-        logging.exception("Deu um erro chatinho aqui:")
-        raise HTTPException(status_code=500, detail=f"Eita, algo deu errado: {e}")
+        logging.exception("Erro ao gerar áudio:")
+        raise HTTPException(status_code=500, detail=f"Eita, algo deu errado: {str(e)}")
 
-# Endpoint pra gerar o áudio e devolver pro usuário
 @app.post("/generate_audio/")
 async def generate_audio_endpoint(
     text: str = Query(..., min_length=1), 
@@ -78,21 +76,15 @@ async def generate_audio_endpoint(
     voice: str = Query("normal")
 ):
     """
-    Recebe texto, idioma e tipo de voz, e manda o áudio em base64.
+    Recebe texto, idioma e voz, e devolve o áudio em base64.
     """
-    try:
-        audio_file, audio_base64 = generate_audio_data(text, lang, voice)
-        return JSONResponse(content={"audio_base64": audio_base64})
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ops, deu ruim: {e}")
+    audio_file, audio_base64 = generate_audio_data(text, lang, voice)
+    return JSONResponse(content={"audio_base64": audio_base64})
 
-# Página inicial com um jeitinho simpático
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """
-    Mostra uma página pra pessoa brincar com as vozes.
+    Página simples pra testar as vozes.
     """
     return """
 <!DOCTYPE html>
@@ -163,7 +155,6 @@ async def read_root():
 </html>
     """
 
-# Liga o servidor com um aviso amigável
 if __name__ == "__main__":
     import uvicorn
     print("Tá vindo aí! Só um segundinho que eu ligo o servidor pra você!")
