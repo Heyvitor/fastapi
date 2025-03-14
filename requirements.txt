@@ -5,7 +5,6 @@ eel==0.16.0
 soundfile
 typing-extensions>=4.9.0 ; python_version < "3.11" #Necessario para fastAPI em python <3.11
 pydantic>=2.5.0, <3.0.0
-espeak
 starlette<0.37.0,>=0.36.3
 pyttsx3
 anyio<4.0.0,>=3.7.1 #Dependencia do starlette
