@@ -2,6 +2,7 @@ fastapi==0.109.2
 uvicorn==0.27.1
 gTTS==2.5.1
 eel==0.16.0
+soundfile
 typing-extensions>=4.9.0 ; python_version < "3.11" #Necessario para fastAPI em python <3.11
 pydantic>=2.5.0, <3.0.0
 starlette<0.37.0,>=0.36.3
