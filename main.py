@@ -1,86 +1,113 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
-from gtts import gTTS
+import pyttsx3
 import io
 import logging
 import base64
+import soundfile as sf  # Para converter o áudio pra base64 compatível
 
-# Configurando o logging pra não ficar perdido no que tá acontecendo
+# Configurando o logging pra gente saber o que tá rolando
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Criando nosso app com FastAPI
 app = FastAPI()
 
-# Função pra criar o áudio com um toque mais humano
-def generate_audio_data(text: str, lang: str = 'pt', voice: str = 'normal'):
+# Função pra gerar o áudio com vozes diferentes
+def generate_audio_data(text: str, lang: str = 'pt-BR', voice: str = 'normal'):
     """
-    Transforma o texto em áudio e deixa ele mais natural com pausas e ajustes.
+    Transforma texto em áudio com pyttsx3, escolhendo voz de homem, mulher ou normal.
     """
     try:
-        # Ajusta a velocidade: 'slow' pra uma vibe mais calma, 'man' pra tentar soar mais grave
-        slow = True if voice in ['slow', 'man'] else False
-        
-        # Pausas pra soar como alguém falando de verdade
-        text_with_pauses = text.replace('.', '. ').replace(',', ', ')
-        
-        # Se for "voz de homem", adiciona um tom mais "pesado" com truque no texto
+        # Inicia o motor de fala
+        engine = pyttsx3.init()
+
+        # Define o idioma (se disponível no sistema)
+        voices = engine.getProperty('voices')
+        if 'pt' in lang.lower():
+            # Tenta encontrar uma voz em português (depende do sistema)
+            for v in voices:
+                if 'pt' in v.languages[0].lower():
+                    engine.setProperty('voice', v.id)
+                    break
+        else:
+            # Usa o padrão do sistema pra outros idiomas
+            engine.setProperty('voice', voices[0].id)
+
+        # Ajusta a voz com base na escolha
         if voice == 'man':
-            text_with_pauses = f"{text_with_pauses}"  # gTTS não tem voz masculina direta, mas slow ajuda
-        
-        # Gera o áudio com o gTTS
-        tts = gTTS(text=text_with_pauses, lang=lang, slow=slow)
-        audio_file = io.BytesIO()  # Guarda o áudio num cantinho temporário
-        tts.write_to_fp(audio_file)
-        audio_file.seek(0)  # Volta pro começo pra usar
+            # Tenta achar uma voz mais grave (geralmente ID 0 ou ajustável no sistema)
+            engine.setProperty('voice', voices[0].id)  # Voz padrão (muitas vezes masculina)
+            engine.setProperty('rate', 150)  # Velocidade um pouco mais lenta pra soar grave
+        elif voice == 'woman':
+            # Tenta uma voz mais aguda (geralmente ID 1 ou ajustável)
+            engine.setProperty('voice', voices[1].id if len(voices) > 1 else voices[0].id)
+            engine.setProperty('rate', 200)  # Mais rápida pra soar feminina
+        else:
+            # Voz normal, sem ajustes extras
+            engine.setProperty('rate', 175)
 
-        # Converte pra base64 pra mandar pro navegador
-        audio_base64 = base64.b64encode(audio_file.read()).decode('utf-8')
-        audio_file.seek(0)  # Volta de novo, só pra garantir
+        # Adiciona pausas pra soar mais humano
+        text_with_pauses = text.replace('.', '. ').replace(',', ', ')
 
-        return audio_file, audio_base64
+        # Gera o áudio e salva temporariamente em memória
+        audio_file = io.BytesIO()
+        engine.save_to_file(text_with_pauses, 'temp.wav')
+        engine.runAndWait()
 
-    except ValueError as ve:
-        logging.error(f"Ops, o idioma deu problema: {ve}")
-        raise HTTPException(status_code=400, detail=f"Eita, o idioma '{lang}' não funcionou: {ve}")
-    except AssertionError:
-        logging.error("Faltou texto, né?")
-        raise HTTPException(status_code=400, detail="Calma aí, me dá um texto pra trabalhar!")
+        # Lê o arquivo WAV e converte pra base64
+        with open('temp.wav', 'rb') as f:
+            audio_data = f.read()
+        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+
+        # Deleta o arquivo temporário
+        import os
+        if os.path.exists('temp.wav'):
+            os.remove('temp.wav')
+
+        return io.BytesIO(audio_data), audio_base64
+
     except Exception as e:
-        logging.exception("Deu um erro doido aqui:")
-        raise HTTPException(status_code=500, detail=f"Putz, algo deu errado: {e}")
+        logging.exception("Deu um erro chatinho aqui:")
+        raise HTTPException(status_code=500, detail=f"Eita, algo deu errado: {e}")
 
-# Endpoint pra receber o pedido e devolver o áudio
+# Endpoint pra gerar o áudio e devolver pro usuário
 @app.post("/generate_audio/")
 async def generate_audio_endpoint(
     text: str = Query(..., min_length=1), 
-    lang: str = Query("pt", max_length=5), 
+    lang: str = Query("pt-BR", max_length=5), 
     voice: str = Query("normal")
 ):
     """
-    Pega o texto, idioma e voz, e devolve o áudio em base64 pra tocar no navegador.
+    Recebe texto, idioma e tipo de voz, e manda o áudio em base64.
     """
-    audio_file, audio_base64 = generate_audio_data(text, lang, voice)
-    return JSONResponse(content={"audio_base64": audio_base64})
+    try:
+        audio_file, audio_base64 = generate_audio_data(text, lang, voice)
+        return JSONResponse(content={"audio_base64": audio_base64})
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ops, deu ruim: {e}")
 
-# Página inicial com um visual simpático
+# Página inicial com um jeitinho simpático
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """
-    Mostra um formulário pra pessoa brincar com o gerador de áudio.
+    Mostra uma página pra pessoa brincar com as vozes.
     """
     return """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Gerador de Voz Amigão</title>
+    <title>Gerador de Vozes Maneiras</title>
     <style>
-        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f9f9f9; }
-        h1 { color: #2c3e50; }
-        textarea { border-radius: 5px; padding: 10px; }
-        select { padding: 5px; }
-        button { padding: 12px 25px; background-color: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer; }
-        button:hover { background-color: #2980b9; }
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f0f0f0; }
+        h1 { color: #34495e; }
+        textarea { border-radius: 5px; padding: 10px; width: 100%; max-width: 500px; }
+        select { padding: 8px; border-radius: 5px; }
+        button { padding: 12px 25px; background-color: #e74c3c; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #c0392b; }
         label { font-weight: bold; margin-right: 10px; }
+        .container { max-width: 600px; margin: 0 auto; }
     </style>
     <script>
         async function generateAudio() {
@@ -89,7 +116,7 @@ async def read_root():
             const voice = document.getElementById('voiceSelect').value;
 
             if (!text.trim()) {
-                alert("Ei, amigo, escreve alguma coisa pra eu falar!");
+                alert("Ei, coloca um texto pra eu falar, vai!");
                 return;
             }
 
@@ -100,43 +127,44 @@ async def read_root():
 
                 if (response.ok) {
                     const data = await response.json();
-                    const audio = new Audio('data:audio/mpeg;base64,' + data.audio_base64);
+                    const audio = new Audio('data:audio/wav;base64,' + data.audio_base64);
                     audio.play();
-                    alert("Pronto, tá tocando! Curte aí!");
+                    alert("Tá na mão! Ouviu direitinho?");
                 } else {
-                    alert("Ops, deu um probleminha... Tenta de novo?");
+                    alert("Ih, deu um probleminha... Vamos tentar de novo?");
                     console.error("Erro:", await response.text());
                 }
             } catch (error) {
-                alert("Ih, a conexão falhou. Vamos tentar mais uma vez?");
+                alert("Ops, a internet deu uma vacilada. Tenta aí mais uma vez?");
                 console.error("Erro na conexão:", error);
             }
         }
     </script>
 </head>
 <body>
-    <h1>Oi! Vamos transformar texto em voz?</h1>
-    <textarea id="textInput" placeholder="Escreve aqui o que eu devo falar..." rows="5" cols="50"></textarea><br><br>
-    <label for="langSelect">Qual idioma eu uso?</label>
-    <select id="langSelect">
-        <option value="pt">Português (Brasil)</option>
-        <option value="en">Inglês</option>
-        <option value="es">Espanhol</option>
-        <option value="fr">Francês</option>
-    </select><br><br>
-    <label for="voiceSelect">Que voz você quer?</label>
-    <select id="voiceSelect">
-        <option value="normal">Normal, tipo eu conversando</option>
-        <option value="slow">Bem calma, pra relaxar</option>
-        <option value="man">Mais grave, tipo voz de homem</option>
-    </select><br><br>
-    <button onclick="generateAudio()">Faz minha voz soar!</button>
+    <div class="container">
+        <h1>E aí, quer ouvir sua voz em outra vibe?</h1>
+        <textarea id="textInput" placeholder="Escreve algo pra eu falar com estilo..." rows="5" cols="50"></textarea><br><br>
+        <label for="langSelect">Qual idioma eu falo?</label>
+        <select id="langSelect">
+            <option value="pt-BR">Português (Brasil)</option>
+            <option value="en-US">Inglês</option>
+            <option value="es-ES">Espanhol</option>
+        </select><br><br>
+        <label for="voiceSelect">Que voz eu coloco?</label>
+        <select id="voiceSelect">
+            <option value="normal">Normal, bem tranquilo</option>
+            <option value="man">Voz de homem, tipo narrador</option>
+            <option value="woman">Voz de mulher, bem suave</option>
+        </select><br><br>
+        <button onclick="generateAudio()">Toca essa voz pra mim!</button>
+    </div>
 </body>
 </html>
     """
 
-# Liga o servidor e deixa tudo rodando
+# Liga o servidor com um aviso amigável
 if __name__ == "__main__":
     import uvicorn
-    print("Beleza, vou subir o servidor pra você brincar!")
+    print("Tá vindo aí! Só um segundinho que eu ligo o servidor pra você!")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
