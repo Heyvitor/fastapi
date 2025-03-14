@@ -12,17 +12,23 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = FastAPI()
 
 # Função para gerar o áudio e retornar tanto o BytesIO quanto o base64
-def generate_audio_data(text: str, lang: str = 'pt'):
+def generate_audio_data(text: str, lang: str = 'pt', voice: str = 'normal'):
     try:
-        # Cria um objeto gTTS.  Lida com exceções específicas.
-        tts = gTTS(text=text, lang=lang, slow=False)
+        # Ajusta a velocidade da voz com base na escolha do usuário
+        slow = True if voice == 'slow' else False
+        
+        # Adiciona pausas simples com base em pontuação para humanizar
+        text_with_pauses = text.replace('.', '. ').replace(',', ', ')  # Espaços após pontos e vírgulas para pausas naturais
+        
+        # Cria um objeto gTTS
+        tts = gTTS(text=text_with_pauses, lang=lang, slow=slow)
         audio_file = io.BytesIO()
         tts.write_to_fp(audio_file)
         audio_file.seek(0)  # Volta para o início do arquivo
 
         # Codifica o áudio em base64
         audio_base64 = base64.b64encode(audio_file.read()).decode('utf-8')
-        audio_file.seek(0) #Importante voltar o ponteiro para o inicio.
+        audio_file.seek(0)  # Volta o ponteiro para o início
 
         return audio_file, audio_base64
 
@@ -36,35 +42,31 @@ def generate_audio_data(text: str, lang: str = 'pt'):
         logging.exception("Erro inesperado durante a geração do áudio:")
         raise HTTPException(status_code=500, detail=f"Erro interno ao gerar o áudio. Detalhes: {e}")
 
-
 @app.post("/generate_audio/")
-async def generate_audio_endpoint(text: str = Query(..., min_length=1), lang: str = Query("pt", max_length=5)):
+async def generate_audio_endpoint(text: str = Query(..., min_length=1), lang: str = Query("pt", max_length=5), voice: str = Query("normal")):
     """
-    Gera um áudio a partir do texto fornecido e retorna um JSON com o base64 e um stream do áudio.
+    Gera um áudio a partir do texto fornecido e retorna um JSON com o base64.
 
     Args:
         text: O texto.
         lang: O código do idioma.
+        voice: A voz escolhida ('normal' ou 'slow').
 
     Returns:
-        JSONResponse: Um JSON contendo o base64 do áudio.  O streaming é feito
-                      separadamente, se solicitado (veja o header 'Accept').
+        JSONResponse: Um JSON contendo o base64 do áudio.
 
     Raises:
         HTTPException: Em caso de erros.
     """
-    audio_file, audio_base64 = generate_audio_data(text, lang)
+    audio_file, audio_base64 = generate_audio_data(text, lang, voice)
 
-    # Retorna JSON com o base64 *e* prepara o StreamingResponse
-    # A melhor maneira de fazer isso.
+    # Retorna JSON com o base64
     return JSONResponse(content={"audio_base64": audio_base64})
-
-
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """
-    Serve a página HTML principal.
+    Serve a página HTML principal com opções de idioma e voz.
     """
     return """
 <!DOCTYPE html>
@@ -75,6 +77,7 @@ async def read_root():
         async function generateAudio() {
             const text = document.getElementById('textInput').value;
             const lang = document.getElementById('langSelect').value;
+            const voice = document.getElementById('voiceSelect').value;
 
             if (!text.trim()) {
                 alert("Por favor, insira algum texto.");
@@ -82,7 +85,7 @@ async def read_root():
             }
 
             try {
-                const response = await fetch(`/generate_audio/?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`, {
+                const response = await fetch(`/generate_audio/?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}&voice=${encodeURIComponent(voice)}`, {
                     method: 'POST',
                 });
 
@@ -94,7 +97,6 @@ async def read_root():
                     const audioElement = new Audio();
                     audioElement.src = 'data:audio/mpeg;base64,' + audioBase64;
                     audioElement.play();
-
 
                 } else {
                     const errorText = await response.text();
@@ -119,17 +121,20 @@ async def read_root():
         <option value="fr">Francês</option>
         <option value="de">Alemão</option>
         <option value="it">Italiano</option>
-         <option value="ja">Japonês</option>
+        <option value="ja">Japonês</option>
         <option value="ko">Coreano</option>
         <option value="ru">Russo</option>
         <option value="ar">Árabe</option>
+    </select><br><br>
+    <label for="voiceSelect">Voz:</label>
+    <select id="voiceSelect">
+        <option value="normal">Voz Normal</option>
+        <option value="slow">Voz Lenta</option>
     </select><br><br>
     <button onclick="generateAudio()">Gerar Áudio</button>
 </body>
 </html>
     """
-
-# A parte do Eel e uvicorn permanece a mesma, então não vou repetir aqui.
 
 if __name__ == "__main__":
     import eel
@@ -137,10 +142,8 @@ if __name__ == "__main__":
     eel.init("web")  # 'web' é um nome de pasta comum, mas pode ser qualquer nome
 
     # Define uma rota estática para servir o eel.js
-    # Isso corrige o erro 404 para /eel.js.  É *fundamental*.
     @app.get("/eel.js")
     async def eel_js():
-        # Lê o conteúdo do arquivo eel.js (caminho relativo!)
         try:
             with open(os.path.join(os.path.dirname(__file__), "web", "eel.js"), "r") as f:
                 content = f.read()
@@ -149,10 +152,7 @@ if __name__ == "__main__":
             raise HTTPException(status_code=404, detail="eel.js não encontrado. Verifique a configuração do Eel e a pasta 'web'.")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Erro ao ler eel.js: {e}")
-            
 
-    # Inicia o servidor FastAPI (usando uvicorn, recomendado para produção)
-    # e, logo em seguida, a interface Eel.
-    # A ordem *importa*: FastAPI primeiro, depois Eel.
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")  # Use log_level="debug" para mais detalhes durante o desenvolvimento
-    eel.start('index.html', size=(600, 400))  # Ajuste o tamanho da janela conforme necessário
+    # Inicia o servidor FastAPI e a interface Eel
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    eel.start('index.html', size=(600, 400))
